@@ -1,0 +1,176 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "Final TypeScript verification",
+			"type": "shell",
+			"command": "npm",
+			"args": [
+				"run",
+				"typecheck"
+			],
+			"isBackground": false,
+			"problemMatcher": [
+				"$tsc"
+			]
+		},
+		{
+			"label": "Final production build",
+			"type": "shell",
+			"command": "npm",
+			"args": [
+				"run",
+				"build"
+			],
+			"isBackground": false,
+			"problemMatcher": []
+		},
+		{
+			"label": "Find local preview process",
+			"type": "shell",
+			"command": "Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -match 'next dev' } | Select-Object ProcessId,CommandLine | Format-List",
+			"isBackground": false,
+			"problemMatcher": []
+		},
+		{
+			"label": "Inspect preview process tree",
+			"type": "shell",
+			"command": "Get-CimInstance Win32_Process | Where-Object { $_.ProcessId -eq 34772 -or $_.ParentProcessId -eq 34772 } | Select-Object ProcessId,ParentProcessId,Name,CommandLine | Format-List",
+			"isBackground": false,
+			"problemMatcher": []
+		},
+		{
+			"label": "Restart stale preview server",
+			"type": "shell",
+			"command": "Stop-Process -Id 8720",
+			"isBackground": false,
+			"problemMatcher": []
+		},
+		{
+			"label": "Run working local preview",
+			"type": "shell",
+			"command": "npm",
+			"args": [
+				"run",
+				"dev"
+			],
+			"isBackground": true,
+			"problemMatcher": []
+		},
+		{
+			"label": "Final app typecheck",
+			"type": "shell",
+			"command": "npm",
+			"args": [
+				"run",
+				"typecheck"
+			],
+			"isBackground": false,
+			"problemMatcher": [
+				"$tsc"
+			]
+		},
+		{
+			"label": "Find current dev server PID",
+			"type": "shell",
+			"command": "Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -match 'next dev' } | Select-Object ProcessId,ParentProcessId,CommandLine | Format-List",
+			"isBackground": false,
+			"problemMatcher": []
+		},
+		{
+			"label": "Identify preview node PID",
+			"type": "shell",
+			"command": "Get-CimInstance Win32_Process | Where-Object { $_.ProcessId -eq 10512 -or $_.ParentProcessId -eq 10512 } | Select-Object ProcessId,ParentProcessId,Name,CommandLine | Format-List",
+			"isBackground": false,
+			"problemMatcher": []
+		},
+		{
+			"label": "Pause preview for build",
+			"type": "shell",
+			"command": "Stop-Process -Id 20604",
+			"isBackground": false,
+			"problemMatcher": []
+		},
+		{
+			"label": "Final production build verification",
+			"type": "shell",
+			"command": "npm",
+			"args": [
+				"run",
+				"build"
+			],
+			"isBackground": false,
+			"problemMatcher": []
+		},
+		{
+			"label": "Run production preview",
+			"type": "shell",
+			"command": "npm",
+			"args": [
+				"run",
+				"start"
+			],
+			"isBackground": true,
+			"problemMatcher": []
+		},
+		{
+			"label": "Check production server response",
+			"type": "shell",
+			"command": "curl.exe",
+			"args": [
+				"-I",
+				"http://localhost:3000"
+			],
+			"isBackground": false,
+			"problemMatcher": []
+		},
+		{
+			"label": "Run organizer portal on port 3001",
+			"type": "shell",
+			"command": "npm",
+			"args": [
+				"run",
+				"dev:organizer"
+			],
+			"isBackground": true,
+			"problemMatcher": [
+				"$tsc-watch"
+			]
+		},
+		{
+			"label": "Check Supabase connectivity without exposing keys",
+			"type": "shell",
+			"command": "node",
+			"args": [
+				"-e",
+				"const fs=require('fs');const raw=fs.readFileSync('.env.local','utf8');const env=Object.fromEntries(raw.split(/\\r?\\n/).filter(x=>x&& !x.trim().startsWith('#')).map(x=>{const i=x.indexOf('=');return [x.slice(0,i).trim(),x.slice(i+1).trim().replace(/^['\"]|['\"]$/g,'')]}));const url=env.NEXT_PUBLIC_SUPABASE_URL;const key=env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY||env.NEXT_PUBLIC_SUPABASE_ANON_KEY;if(!url||!key){console.log(JSON.stringify({configured:false,hasProjectUrl:!!url,hasPublishableKey:!!key}));process.exit(0)};(async()=>{const names=['teams','team_members','submissions','submission_files','admin_users','event_settings','evaluation_batches','evaluation_jobs','evaluation_evidence','ai_evaluations','evaluation_criteria','leaderboards','shortlisted_teams','audit_logs'];const results=await Promise.all(names.map(async table=>{try{const r=await fetch(url+'/rest/v1/'+table+'?select=*&limit=0',{headers:{apikey:key,Authorization:'Bearer '+key,Accept:'application/json'}});return {table,status:r.status,exists:r.status!==404}}catch(e){return {table,error:String(e)}}}));console.log(JSON.stringify({configured:true,baseUrlHost:new URL(url).host,tables:results},null,2))})()"
+			],
+			"isBackground": false,
+			"problemMatcher": []
+		},
+		{
+			"label": "Verify Supabase tables",
+			"type": "shell",
+			"command": "node",
+			"args": [
+				".tmp-supabase-check.cjs"
+			],
+			"isBackground": false,
+			"problemMatcher": []
+		},
+		{
+			"label": "Check Supabase CLI login",
+			"type": "shell",
+			"command": "$cli = Get-Command supabase -ErrorAction SilentlyContinue; if ($cli) { Write-Output 'Supabase CLI available'; supabase --version; supabase projects list --output json | ConvertFrom-Json | ForEach-Object { $_.projects | ForEach-Object { [PSCustomObject]@{ ref = $_.id; name = $_.name } } } | ConvertTo-Json -Compress } else { Write-Output 'Supabase CLI is not installed or not on PATH' }",
+			"isBackground": false,
+			"problemMatcher": []
+		},
+		{
+			"label": "Inspect configured secret names only",
+			"type": "shell",
+			"command": "$keys = Get-Content .env.local | Where-Object { $_ -match '^\\s*[A-Za-z_][A-Za-z0-9_]*\\s*=' } | ForEach-Object { ($_ -split '=',2)[0].Trim() }; [PSCustomObject]@{ LocalEnvKeys = ($keys -join ', '); SupabaseAccessTokenInProcess = [bool]$env:SUPABASE_ACCESS_TOKEN; SupabaseCliSessionAvailable = (Test-Path (Join-Path $HOME '.supabase\\access-token')) } | Format-List",
+			"isBackground": false,
+			"problemMatcher": []
+		}
+	]
+}

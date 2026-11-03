@@ -220,6 +220,7 @@ type FinalRanking = {
   id: string;
   position: number;
   decision_reason: string;
+  status: "recommended" | "approved";
   submissions: RelatedSubmission;
 };
 
@@ -229,6 +230,7 @@ export function FinalRankingsPage() {
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [reasons, setReasons] = useState<string[]>([]);
   const [finalRows, setFinalRows] = useState<FinalRanking[]>([]);
+  const [stagedRows, setStagedRows] = useState<FinalRanking[]>([]);
   const [manualReviews, setManualReviews] = useState<ManualReview[]>([]);
   const [reviewReasons, setReviewReasons] = useState<Record<string, string>>({});
   const [message, setMessage] = useState("");
@@ -247,7 +249,7 @@ export function FinalRankingsPage() {
         .select("submission_uuid,rank,score,track,submissions(reference,project_title,teams(team_id,team_name,track))")
         .eq("track", track).eq("is_demo", false).order("rank", { ascending: true }),
       supabase.from("final_rankings")
-        .select("id,position,decision_reason,submissions(reference,project_title,teams(team_id,team_name,track))")
+        .select("id,position,decision_reason,status,submissions(reference,project_title,teams(team_id,team_name,track))")
         .eq("track", track).eq("is_demo", false).order("position", { ascending: true }),
       supabase.from("ai_evaluations")
         .select("submission_uuid,submissions(reference,project_title,teams(team_id,team_name,track))")
@@ -263,7 +265,9 @@ export function FinalRankingsPage() {
     }
     const rows = (leaderboardResult.data ?? []) as Candidate[];
     setCandidates(rows);
-    setFinalRows((finalsResult.data ?? []) as FinalRanking[]);
+    const rankings = (finalsResult.data ?? []) as FinalRanking[];
+    setFinalRows(rankings.filter((row) => row.status === "approved"));
+    setStagedRows(rankings.filter((row) => row.status === "recommended"));
     const resolved = new Set((resolutionsResult.data ?? []).map((item) => item.submission_uuid));
     const pending = ((reviewsResult.data ?? []) as ManualReview[]).filter((item) => !resolved.has(item.submission_uuid));
     setManualReviews(pending);
@@ -365,6 +369,12 @@ export function FinalRankingsPage() {
           })}
           <button className="button" type="submit" disabled={busy || !selectedIds.length}><CheckCircle2 size={15} />{busy ? "Saving decision…" : "Approve final ranking"}</button>
         </form>}
+      </section>
+      <section className="panel">
+        <div className="panel-header"><h2>Staged recommendations · {track}</h2><span className="status">AWAITING APPROVAL</span></div>
+        {!stagedRows.length ? <div className="empty">No final recommendations have been staged for this track.</div> : <div className="table-wrap"><table><thead><tr><th>Position</th><th>Team / project</th><th>Reason</th></tr></thead><tbody>
+          {stagedRows.map((row) => <tr key={row.id}><td>#{row.position}</td><td><TeamProject submission={row.submissions} /></td><td>{row.decision_reason}</td></tr>)}
+        </tbody></table></div>}
       </section>
       <section className="panel">
         <div className="panel-header"><h2>Approved final results · {track}</h2></div>

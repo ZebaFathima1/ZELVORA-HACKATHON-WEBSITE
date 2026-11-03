@@ -171,6 +171,17 @@
 			"command": "$keys = Get-Content .env.local | Where-Object { $_ -match '^\\s*[A-Za-z_][A-Za-z0-9_]*\\s*=' } | ForEach-Object { ($_ -split '=',2)[0].Trim() }; [PSCustomObject]@{ LocalEnvKeys = ($keys -join ', '); SupabaseAccessTokenInProcess = [bool]$env:SUPABASE_ACCESS_TOKEN; SupabaseCliSessionAvailable = (Test-Path (Join-Path $HOME '.supabase\\access-token')) } | Format-List",
 			"isBackground": false,
 			"problemMatcher": []
+		},
+		{
+			"label": "Temporary: Show worktree status",
+			"type": "shell",
+			"command": "git",
+			"args": [
+				"status",
+				"--short"
+			],
+			"isBackground": false,
+			"problemMatcher": []
 		}
 	]
 }

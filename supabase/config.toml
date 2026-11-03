@@ -16,5 +16,23 @@ verify_jwt = true
 [functions.process-evaluation]
 verify_jwt = true
 
+[functions.start-ai-evaluation]
+verify_jwt = true
+
+[functions.evaluate-project]
+verify_jwt = true
+
+[functions.evaluation-status]
+verify_jwt = true
+
+[functions.finalize-leaderboard]
+verify_jwt = true
+
+[functions.ai-worker-control]
+verify_jwt = false
+
+[functions.ai-worker-status]
+verify_jwt = true
+
 [functions.test-ai-provider]
 verify_jwt = true

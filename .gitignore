@@ -5,6 +5,16 @@ out
 .env.local
 .env.*.local
 supabase/.temp/
+ai-worker/.env
+ai-worker/node_modules/
+ai-worker/.worker-id
+ai-worker/.worker.lock
+ai-worker/.worker.pid
+ai-worker/.active-job.json
+ai-worker/.active-job.json.tmp
+ai-worker/.stop-worker
+ai-worker/worker.log
+ai-worker/worker-error.log
 coverage
 *.log
 *.tsbuildinfo

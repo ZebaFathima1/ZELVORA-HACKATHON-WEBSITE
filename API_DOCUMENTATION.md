@@ -18,17 +18,31 @@ Success: `{ "submission_id": "uuid", "reference": "ZSUB-0001", "submitted_at": "
 
 Duplicate response: HTTP 409 with the exact no-multiple-submissions message and existing reference/project title where available. Closed window: HTTP 403. Invalid data: HTTP 400. Public rate limits are per IP and per Team ID.
 
-## `POST /start-evaluation`
+## `POST /start-ai-evaluation`
 
 Admin/organizer only. No required body. Atomically freezes submissions and creates an immutable project snapshot, batch, and jobs.
 
 Success: `{ "batch_id": "uuid" }`
 
-## `POST /process-evaluation`
+## `POST /ai-worker-control`
 
-Authenticated admin/evaluator only. Request: `{ "batch_id": "uuid" }`. Claims one job, retrieves GitHub metadata/README, requests a JSON evaluation from the configured LLM provider, validates criterion scores, and persists the report. Returns `{ "done": true, "processed": false }` when no queued job remains; otherwise `{ "done": false, "processed": true, "score": 82 }`. Provider failures mark only that job failed.
+Worker operations use the `x-worker-secret` header and `worker_id`; the shared secret is server-side only and is never sent to the browser. Actions include `heartbeat`, `claim`, `context`, `progress`, `renew`, `complete`, and `fail`. Admin-only `pause` and `resume` actions require a Supabase Auth bearer token and organizer role.
 
-LLM provider requirements: OpenAI-compatible `/chat/completions` with `response_format: { "type": "json_object" }`.
+Claiming is atomic in PostgreSQL and assigns a 10-minute renewable lease. Worker context is built from the immutable batch snapshot, private Supabase Storage, and static GitHub API inspection; repository code is never executed. The Windows worker sends the context to local Ollama and returns the model JSON. The Edge Function validates score ceilings and evidence reference IDs before the existing completion RPC saves all evaluation/evidence tables and provisional rankings.
+
+## `GET /ai-worker-status`
+
+Authenticated admin/evaluator only. Reports whether a recent Windows worker heartbeat is present, Ollama is reachable, the configured model passed a generation smoke test, and the queue is ready. `start-ai-evaluation` refuses to create a batch when the worker or model is unavailable.
+
+## `POST /evaluation-status`
+
+Authenticated admin/evaluator only. Optional request: `{ "batch_id": "uuid" }`; without it, returns the latest real batch. Returns job counts, job stages, manual-review count, and provisional track Top 5 data. The organizer UI subscribes to Supabase Realtime and keeps a five-second polling fallback.
+
+## `POST /finalize-leaderboard`
+
+Admin/organizer only. Request: `{ "batch_id": "uuid" }`. Once jobs are no longer queued or processing and required manual reviews are resolved, stores per-track Top 5 as `recommended` rows. Failed jobs are reported as flagged; they are not ranked. This does not approve awards or overwrite existing approved rankings. Human approval remains required.
+
+Inference runs only on the configured local Ollama host (`qwen3-vl:8b`). The browser and deployed website never connect to `localhost:11434`; the worker makes outbound HTTPS requests to Supabase.
 
 ## Authenticated database API
 

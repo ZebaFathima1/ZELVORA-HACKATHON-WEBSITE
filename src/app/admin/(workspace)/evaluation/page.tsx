@@ -1,6 +1,6 @@
 "use client";
 
-import { Activity, AlertTriangle, LoaderCircle, Play, RefreshCw } from "lucide-react";
+import { AlertTriangle, LoaderCircle, Play, RefreshCw } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { getFunctionErrorMessage } from "@/lib/supabase/function-error";
@@ -28,6 +28,34 @@ type EvaluationJob = {
   } | { project_title: string; teams: { team_id: string; team_name: string } | { team_id: string; team_name: string }[] | null }[] | null;
 };
 
+type WorkerStatus = {
+  ready: boolean;
+  supabase: string;
+  worker: {
+    online: boolean;
+    status: string;
+    display_name: string | null;
+    last_heartbeat: string | null;
+    last_error: string | null;
+    current_job_id: string | null;
+    current_project: string | null;
+  };
+  ollama: { connected: boolean };
+  model: { name: string; available: boolean };
+  batch: {
+    id: string;
+    status: string;
+    paused: boolean;
+    total: number;
+    pending: number;
+    processing: number;
+    completed: number;
+    failed: number;
+  } | null;
+  eligible_projects: number;
+  queue_ready: boolean;
+};
+
 function first<T>(value: T | T[] | null | undefined): T | undefined {
   return Array.isArray(value) ? value[0] : value ?? undefined;
 }
@@ -35,77 +63,98 @@ function first<T>(value: T | T[] | null | undefined): T | undefined {
 export default function EvaluationPage() {
   const [batch, setBatch] = useState<Batch | null>(null);
   const [jobs, setJobs] = useState<EvaluationJob[]>([]);
+  const [workerStatus, setWorkerStatus] = useState<WorkerStatus | null>(null);
   const [message, setMessage] = useState("");
   const [errorMessage, setErrorMessage] = useState("");
   const [busy, setBusy] = useState(false);
   const [testingProvider, setTestingProvider] = useState(false);
+  const [finalizing, setFinalizing] = useState(false);
   const [submissionsFrozen, setSubmissionsFrozen] = useState(false);
   const [manualReviewCount, setManualReviewCount] = useState(0);
 
   const refresh = useCallback(async () => {
     const supabase = createClient();
-    const [batchResult, settingsResult, reviewsResult] = await Promise.all([
-      supabase.from("evaluation_batches").select("*").eq("is_demo", false).order("created_at", { ascending: false }).limit(1).maybeSingle(),
-      supabase.from("event_settings").select("frozen").eq("id", true).single(),
-      supabase.from("ai_evaluations").select("id", { count: "exact", head: true }).eq("is_demo", false).eq("manual_review", true)
+    const [statusResult, workerResult, settingsResult] = await Promise.all([
+      supabase.functions.invoke("evaluation-status", { body: {} }),
+      supabase.functions.invoke("ai-worker-status", { method: "GET" }),
+      supabase.from("event_settings").select("frozen").eq("id", true).single()
     ]);
-    const failure = batchResult.error ?? settingsResult.error ?? reviewsResult.error;
-    if (failure || !settingsResult.data) {
-      setErrorMessage(failure?.message ?? "Could not load the event submission settings.");
+    if (statusResult.error || workerResult.error || settingsResult.error || !settingsResult.data) {
+      setErrorMessage(statusResult.error || workerResult.error
+        ? await getFunctionErrorMessage(statusResult.error ?? workerResult.error)
+        : settingsResult.error?.message ?? "Could not load the event submission settings.");
       return;
     }
-    setBatch(batchResult.data as Batch | null);
-    setSubmissionsFrozen(settingsResult.data.frozen);
-    setManualReviewCount(reviewsResult.count ?? 0);
-    if (batchResult.data) {
-      const { data: jobRows, error: jobsError } = await supabase.from("evaluation_jobs")
-        .select("id,status,progress_stage,attempts,error_message,submissions(project_title,teams(team_id,team_name))")
-        .eq("batch_uuid", batchResult.data.id).eq("is_demo", false)
-        .order("created_at", { ascending: true });
-      if (jobsError) setErrorMessage(jobsError.message);
-      else setJobs((jobRows ?? []) as EvaluationJob[]);
-    } else {
-      setJobs([]);
+    if (!statusResult.data || !Array.isArray(statusResult.data.jobs) || !statusResult.data.counts ||
+      typeof statusResult.data.counts.manual_review !== "number") {
+      setErrorMessage("Evaluation status returned an invalid response.");
+      return;
     }
+    if (!workerResult.data || typeof workerResult.data.ready !== "boolean" ||
+      typeof workerResult.data.worker?.online !== "boolean" ||
+      typeof workerResult.data.ollama?.connected !== "boolean" ||
+      typeof workerResult.data.model?.available !== "boolean") {
+      setErrorMessage("AI worker status returned an invalid response.");
+      return;
+    }
+    setBatch(statusResult.data.batch as Batch | null);
+    setWorkerStatus(workerResult.data as WorkerStatus);
+    setSubmissionsFrozen(settingsResult.data.frozen);
+    setManualReviewCount(statusResult.data.counts.manual_review);
+    setJobs(statusResult.data.jobs as EvaluationJob[]);
   }, []);
 
   useEffect(() => { void refresh(); }, [refresh]);
 
-  async function testProvider() {
+  useEffect(() => {
+    const supabase = createClient();
+    let timer: number | undefined;
+    const refreshSoon = () => {
+      window.clearTimeout(timer);
+      timer = window.setTimeout(() => { void refresh(); }, 250);
+    };
+    const channel = supabase.channel("evaluation-live-status")
+      .on("postgres_changes", { event: "*", schema: "public", table: "evaluation_batches" }, refreshSoon)
+      .on("postgres_changes", { event: "*", schema: "public", table: "evaluation_jobs" }, refreshSoon)
+      .on("postgres_changes", { event: "*", schema: "public", table: "ai_workers" }, refreshSoon)
+      .subscribe();
+    return () => {
+      window.clearTimeout(timer);
+      void supabase.removeChannel(channel);
+    };
+  }, [refresh]);
+
+  async function testWorkerConnection() {
     setTestingProvider(true);
     setErrorMessage("");
     setMessage("");
     try {
-      const { data, error } = await createClient().functions.invoke("test-ai-provider", { body: {} });
+      const { data, error } = await createClient().functions.invoke("ai-worker-status", { method: "GET" });
       if (error) {
         setErrorMessage(await getFunctionErrorMessage(error));
         return;
       }
-      if (!data?.ready) {
-        setErrorMessage("The AI provider test returned an unexpected response.");
+      if (!data || typeof data.ready !== "boolean" || !data.worker || !data.ollama || !data.model) {
+        setErrorMessage("AI worker status returned an invalid response.");
         return;
       }
-      setMessage(`AI provider connection successful. Model: ${data.model}.`);
+      setWorkerStatus(data as WorkerStatus);
+      if (!data.ready) {
+        const reasons = [
+          !data.worker.online ? "Windows worker is offline." : "",
+          data.worker.online && !data.ollama.connected ? "Ollama is disconnected." : "",
+          data.worker.online && data.ollama.connected && !data.model.available
+            ? `Model ${data.model.name} is unavailable or failed its startup generation check.` : ""
+        ].filter(Boolean);
+        setErrorMessage(reasons.join(" ") || "The worker is not ready.");
+        return;
+      }
+      setMessage(`Supabase, worker, Ollama, and ${data.model.name} are ready.`);
     } catch (testError) {
-      setErrorMessage(testError instanceof Error ? testError.message : "The AI provider connection test failed.");
+      setErrorMessage(testError instanceof Error ? testError.message : "The local AI worker connection test failed.");
     } finally {
       setTestingProvider(false);
     }
-  }
-
-  async function runWorkers(batchId: string) {
-    const supabase = createClient();
-    async function worker() {
-      for (let count = 0; count < 300; count += 1) {
-        const { data, error } = await supabase.functions.invoke("process-evaluation", { body: { batch_id: batchId } });
-        if (error) {
-          throw new Error(await getFunctionErrorMessage(error));
-        }
-        if (data?.done) return;
-      }
-      throw new Error("An evaluation worker reached its request limit. Resume the batch to continue processing.");
-    }
-    await Promise.all(Array.from({ length: 4 }, () => worker()));
   }
 
   async function start() {
@@ -124,38 +173,81 @@ export default function EvaluationPage() {
       setBusy(false);
       return;
     }
-    const { data, error } = await createClient().functions.invoke("start-evaluation", { body: {} });
+    const { data, error } = await createClient().functions.invoke("start-ai-evaluation", { body: {} });
     if (error) {
       setErrorMessage(await getFunctionErrorMessage(error));
       setBusy(false);
       return;
     }
-    setMessage("Submissions are frozen. Evaluation jobs are being processed with four controlled workers.");
-    await refresh();
-    try {
-      await runWorkers(data.batch_id);
-      setMessage("Evaluation workers finished processing all available jobs.");
-    } catch (workerError) {
-      setErrorMessage(workerError instanceof Error ? workerError.message : "The evaluation worker stopped unexpectedly.");
-    } finally {
-      await refresh();
+    if (!data || typeof data.batch_id !== "string") {
+      setErrorMessage("The start-evaluation endpoint returned an invalid batch ID.");
       setBusy(false);
+      return;
     }
+    setMessage("Evaluation jobs are queued in Supabase. Your Windows worker will process them with local Ollama.");
+    await refresh();
+    setBusy(false);
   }
 
   async function resume() {
     if (!batch) return;
     setBusy(true);
     setErrorMessage("");
-    setMessage("Resuming workers for the active batch.");
+    setMessage("Resuming the active evaluation batch.");
     try {
-      await runWorkers(batch.id);
-      setMessage("Evaluation workers finished processing all available jobs.");
-    } catch (workerError) {
-      setErrorMessage(workerError instanceof Error ? workerError.message : "The evaluation worker stopped unexpectedly.");
+      const { data, error } = await createClient().functions.invoke("ai-worker-control", {
+        body: { action: "resume" }
+      });
+      if (error) throw new Error(await getFunctionErrorMessage(error));
+      setMessage(data?.paused === false ? "Batch resumed. The Windows worker will continue processing." : "Batch resume status could not be confirmed.");
+    } catch (resumeError) {
+      setErrorMessage(resumeError instanceof Error ? resumeError.message : "Could not resume evaluation.");
     } finally {
       await refresh();
       setBusy(false);
+    }
+  }
+
+  async function pause() {
+    setBusy(true);
+    setErrorMessage("");
+    try {
+      const { data, error } = await createClient().functions.invoke("ai-worker-control", {
+        body: { action: "pause" }
+      });
+      if (error) throw new Error(await getFunctionErrorMessage(error));
+      setMessage(data?.paused === true
+        ? "Batch paused. The current project may finish; no new project will be claimed."
+        : "Batch pause status could not be confirmed.");
+    } catch (pauseError) {
+      setErrorMessage(pauseError instanceof Error ? pauseError.message : "Could not pause evaluation.");
+    } finally {
+      await refresh();
+      setBusy(false);
+    }
+  }
+
+  async function finalizeLeaderboard() {
+    if (!batch || !window.confirm("Stage provisional Top 5 recommendations for each track? Organizers must still approve final awards.")) return;
+    setFinalizing(true);
+    setErrorMessage("");
+    setMessage("");
+    try {
+      const { data, error } = await createClient().functions.invoke("finalize-leaderboard", {
+        body: { batch_id: batch.id }
+      });
+      if (error) throw new Error(await getFunctionErrorMessage(error));
+      if (!data || typeof data.staged_recommendations !== "number" || typeof data.failed_jobs_flagged !== "number") {
+        throw new Error("Leaderboard finalization returned an invalid response.");
+      }
+      setMessage(
+        `Staged ${data.staged_recommendations} provisional rankings. ${data.failed_jobs_flagged} failed job(s) remain flagged; organizer approval is still required.`
+      );
+      await refresh();
+    } catch (finalizeError) {
+      setErrorMessage(finalizeError instanceof Error ? finalizeError.message : "Could not stage final recommendations.");
+    } finally {
+      setFinalizing(false);
     }
   }
 
@@ -174,8 +266,15 @@ export default function EvaluationPage() {
     : batch?.total_jobs ? Math.round((batch.completed_jobs / batch.total_jobs) * 100) : 0;
   return (
     <>
-      <div className="admin-title"><div><span className="eyebrow">Evidence-based evaluation</span><h1>AI evaluation</h1><p>Freeze an immutable submission snapshot and process projects with controlled parallel workers.</p></div><div className="inline-actions"><button className="button secondary small" onClick={() => void testProvider()} disabled={testingProvider || busy}>{testingProvider ? <><LoaderCircle size={13} /> Testing…</> : "Test AI connection"}</button><button className="button secondary small" onClick={() => void refresh()}><RefreshCw size={13} /> Refresh</button></div></div>
-      <div className="notice-bar"><AlertTriangle size={17} /> AI results are recommendations for human review, not final awards. The evaluator does not execute submitted code and will explicitly flag unverified evidence. Submissions are currently {submissionsFrozen ? "frozen" : "not frozen"}.</div>
+      <div className="admin-title"><div><span className="eyebrow">Local Qwen3-VL evaluation</span><h1>AI evaluation</h1><p>Supabase queues projects; your Windows worker evaluates them with local Ollama.</p></div><div className="inline-actions"><button className="button secondary small" onClick={() => void testWorkerConnection()} disabled={testingProvider || busy}>{testingProvider ? <><LoaderCircle size={13} /> Testing…</> : "Test AI connection"}</button><button className="button secondary small" onClick={() => void refresh()}><RefreshCw size={13} /> Refresh</button></div></div>
+      <section className="panel">
+        <div className="panel-header"><h2>AI evaluation system status</h2><span className={`status ${workerStatus?.ready ? "success" : "warning"}`}>{workerStatus?.ready ? "READY" : "NOT READY"}</span></div>
+        <div className="stats-grid" style={{ gridTemplateColumns: "repeat(4,1fr)" }}>
+          {[["Supabase", workerStatus?.supabase ?? "Checking"], ["Local AI worker", workerStatus?.worker.online ? (workerStatus.worker.status === "processing" ? "Online · Processing" : "Online · Idle") : "Offline"], ["Ollama", workerStatus?.ollama.connected ? "Connected" : "Disconnected"], ["Model", workerStatus?.model.available ? `${workerStatus.model.name} available` : `${workerStatus?.model.name ?? "qwen3-vl:8b"} unavailable`], ["Queue", workerStatus?.queue_ready ? "Ready" : "Not ready"], ["Eligible projects", workerStatus?.eligible_projects ?? 0], ["Active batch", workerStatus?.batch?.id ?? "Not started"], ["Current project", workerStatus?.worker.current_project ?? "Idle"], ["Last heartbeat", workerStatus?.worker.last_heartbeat ? new Date(workerStatus.worker.last_heartbeat).toLocaleTimeString() : "Never"]].map(([label, value]) => <div className="stat-card" key={String(label)}><span>{String(label)}</span><strong>{String(value)}</strong></div>)}
+        </div>
+        {workerStatus?.worker.last_error && <div className="alert error">{workerStatus.worker.last_error}</div>}
+      </section>
+      <div className="notice-bar"><AlertTriangle size={17} /> Evaluations run on the Windows Ollama worker, never in the browser. Results are provisional recommendations, not final awards. Submissions are currently {submissionsFrozen ? "frozen" : "not frozen"}.</div>
       {errorMessage && <div className="alert error">{errorMessage}</div>}
       {message && <div className="alert success">{message}</div>}
       <section className="panel">
@@ -205,8 +304,11 @@ export default function EvaluationPage() {
         <div className="form-actions">
           <span className="muted" style={{ fontSize: 11 }}>Freeze submissions in Event Settings before creating a snapshot. Reopen them there after evaluation.</span>
           <div className="inline-actions">
-            {batch && ["queued", "running"].includes(batch.status) && <button className="button secondary" disabled={busy} onClick={resume}>{busy ? <><LoaderCircle size={15} /> Evaluating…</> : "Resume workers"}</button>}
-            <button className="button" disabled={busy || !submissionsFrozen || Boolean(batch && ["queued", "running"].includes(batch.status))} onClick={start}>{busy ? <><LoaderCircle size={15} /> Evaluating…</> : <><Play size={15} /> START AI EVALUATION</>}</button>
+            {batch && ["queued", "running"].includes(batch.status) && (workerStatus?.batch?.paused
+              ? <button className="button secondary" disabled={busy} onClick={resume}>Resume evaluation</button>
+              : <button className="button secondary" disabled={busy} onClick={pause}>Pause evaluation</button>)}
+            {batch && ["completed", "completed_with_errors", "failed"].includes(batch.status) && <button className="button secondary" disabled={finalizing || busy} onClick={() => void finalizeLeaderboard()}>{finalizing ? <><LoaderCircle size={15} /> Staging…</> : "Stage final Top 5 recommendations"}</button>}
+            <button className="button" disabled={busy || finalizing || !submissionsFrozen || !workerStatus?.ready || Boolean(batch && ["queued", "running"].includes(batch.status))} onClick={start}>{busy ? <><LoaderCircle size={15} /> Queuing…</> : <><Play size={15} /> START AI EVALUATION</>}</button>
           </div>
         </div>
       </section>
@@ -214,8 +316,8 @@ export default function EvaluationPage() {
         <div className="panel-header"><h2>What the evaluator can verify</h2></div>
         <div className="info-grid">
           <div className="info-cell"><small>Project narrative</small><strong>Submitted project form fields</strong></div>
-          <div className="info-cell"><small>GitHub evidence</small><strong>Public repository metadata, languages, README</strong></div>
-          <div className="info-cell"><small>Uploads</small><strong>Private file metadata (text extraction must be added to worker deployment)</strong></div>
+          <div className="info-cell"><small>GitHub evidence</small><strong>Public repository metadata, languages, README, and selected source files</strong></div>
+          <div className="info-cell"><small>Uploads</small><strong>Private PDF/PPT text extraction and up to four embedded PPTX images</strong></div>
           <div className="info-cell"><small>Deployed app</small><strong>Link submitted, not crawled or executed</strong></div>
         </div>
       </section>

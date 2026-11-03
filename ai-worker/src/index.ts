@@ -154,29 +154,40 @@ async function ollamaTags() {
     throw new Error("Ollama returned an invalid model list.");
   }
   const models = (payload as { models: Array<{ name?: unknown }> }).models;
-  const available = models.some((item) => typeof item.name === "string" &&
-    (item.name === config.model || item.name.startsWith(`${config.model}:`)));
+  const available = models.some((item) => {
+    if (typeof item.name !== "string") return false;
+    // Exact match, tag variants (model:tag*), or prefixed family names.
+    return item.name === config.model ||
+      item.name.startsWith(`${config.model}-`) ||
+      item.name.startsWith(`${config.model}:`) ||
+      (config.model.includes(":") && item.name.startsWith(config.model));
+  });
   return available;
 }
 
 async function ollamaGenerate(prompt: string) {
-  const response = await fetch(`${config.ollamaUrl}/api/generate`, {
+  // qwen3-vl often leaves /api/generate "response" empty and fills "thinking".
+  // Use /api/chat for the readiness smoke test so model availability is real.
+  const response = await fetch(`${config.ollamaUrl}/api/chat`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       model: config.model,
-      prompt,
       stream: false,
       keep_alive: config.keepAlive,
+      messages: [{ role: "user", content: prompt }],
       options: { num_predict: 32, temperature: 0 }
     }),
-    signal: AbortSignal.timeout(config.timeoutMs)
+    signal: AbortSignal.timeout(Math.min(config.timeoutMs, 180000))
   });
   if (!response.ok) throw new Error(`Ollama model smoke test failed (HTTP ${response.status}).`);
   const payload: unknown = await response.json();
-  if (typeof payload !== "object" || payload === null ||
-    typeof (payload as { response?: unknown }).response !== "string" ||
-    !(payload as { response: string }).response.trim()) {
+  const message = typeof payload === "object" && payload !== null
+    ? (payload as { message?: { content?: unknown; thinking?: unknown } }).message
+    : undefined;
+  const content = typeof message?.content === "string" ? message.content.trim() : "";
+  const thinking = typeof message?.thinking === "string" ? message.thinking.trim() : "";
+  if (!content && !thinking) {
     throw new Error("Ollama model smoke test returned no generated text.");
   }
 }
@@ -252,11 +263,16 @@ async function ollamaEvaluate(context: EvaluationContext) {
   });
   if (!response.ok) throw new Error(`Ollama evaluation failed (HTTP ${response.status}).`);
   const payload: unknown = await response.json();
-  if (typeof payload !== "object" || payload === null ||
-    typeof (payload as { message?: { content?: unknown } }).message?.content !== "string") {
+  if (typeof payload !== "object" || payload === null) {
     throw new Error("Ollama returned no evaluation content.");
   }
-  return parseJson((payload as { message: { content: string } }).message.content);
+  const message = (payload as { message?: { content?: unknown; thinking?: unknown } }).message;
+  const content = typeof message?.content === "string" ? message.content.trim() : "";
+  const thinking = typeof message?.thinking === "string" ? message.thinking.trim() : "";
+  // Prefer content; some qwen3 builds emit structured text only under thinking.
+  const raw = content || thinking;
+  if (!raw) throw new Error("Ollama returned no evaluation content.");
+  return parseJson(raw);
 }
 
 async function delay(milliseconds: number) {

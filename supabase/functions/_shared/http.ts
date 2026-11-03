@@ -1,4 +1,16 @@
-const configuredOrigins = (Deno.env.get("ALLOWED_ORIGIN") ?? "*")
+/**
+ * Explicit CORS allowlist for Edge Functions.
+ *
+ * Configure ALLOWED_ORIGIN as a comma-separated list of exact origins, e.g.:
+ *   http://localhost:3000,http://localhost:3001,http://127.0.0.1:3000,http://127.0.0.1:3001
+ * Later append production: ,https://your-production-domain.example
+ *
+ * Never emits wildcard "*".
+ * Built-in local fallback also accepts http://localhost|127.0.0.1:(3000|3001).
+ * Production HTTPS origins must be listed explicitly in ALLOWED_ORIGIN when deployed.
+ */
+
+const configuredOrigins = (Deno.env.get("ALLOWED_ORIGIN") ?? "")
   .split(",")
   .map((origin) => origin.trim())
   .filter(Boolean);
@@ -14,28 +26,28 @@ function isLocalDevelopmentOrigin(origin: string) {
   }
 }
 
-const allowsLocalDevelopment = configuredOrigins.some(isLocalDevelopmentOrigin);
+function isAllowedOrigin(origin: string | null): origin is string {
+  if (!origin) return false;
+  if (configuredOrigins.includes(origin)) return true;
+  return isLocalDevelopmentOrigin(origin);
+}
 
 export function corsHeaders(request?: Request) {
   const origin = request?.headers.get("origin");
-  const isAllowed = origin && (
-    configuredOrigins.includes("*")
-    || configuredOrigins.includes(origin)
-    || isLocalDevelopmentOrigin(origin)
-  );
   const headers: Record<string, string> = {
-    "Access-Control-Allow-Headers": "authorization, apikey, content-type, x-client-info",
-    "Access-Control-Allow-Methods": "POST, OPTIONS",
+    "Access-Control-Allow-Headers":
+      "authorization, apikey, content-type, x-client-info, x-worker-secret",
+    "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
     "Content-Type": "application/json",
     Vary: "Origin"
   };
-  if (configuredOrigins.includes("*") || allowsLocalDevelopment) {
-    headers["Access-Control-Allow-Origin"] = "*";
-  } else if (isAllowed) {
+
+  // Reflect only an explicitly allowed origin. Never emit "*".
+  if (isAllowedOrigin(origin)) {
     headers["Access-Control-Allow-Origin"] = origin;
-  } else if (!request) {
-    headers["Access-Control-Allow-Origin"] = configuredOrigins[0] ?? "*";
+    headers["Access-Control-Allow-Credentials"] = "true";
   }
+
   return headers;
 }
 

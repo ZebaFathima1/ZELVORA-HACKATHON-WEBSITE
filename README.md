@@ -55,7 +55,7 @@ Hackathon participant submission and organizer evaluation portal for Zelvora Tec
    | Secret | Value |
    | --- | --- |
    | `AI_WORKER_SECRET` | A new random secret shared only with your local worker; do not use your Supabase service-role key |
-   | `ALLOWED_ORIGIN` | `http://localhost:3001` while testing locally (the functions also allow `localhost:3000`) |
+   | `ALLOWED_ORIGIN` | Explicit comma-separated allowlist. Localhost now: `http://localhost:3000,http://localhost:3001,http://127.0.0.1:3000,http://127.0.0.1:3001`. Append `,https://YOUR_PRODUCTION_DOMAIN` later (never `*`) |
 
    Generate a secret locally in PowerShell with `$bytes = New-Object byte[] 32; [Security.Cryptography.RandomNumberGenerator]::Fill($bytes); [Convert]::ToBase64String($bytes)` and use the exact same value in `ai-worker/.env`. Supabase supplies `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` to the Edge Functions. Never put the service-role key or worker secret in the website's `.env.local` or browser code. `GITHUB_TOKEN` is optional and can improve public GitHub API rate limits.
 6. Deploy the Edge Functions:

@@ -19,7 +19,28 @@ try {
   $tags = Invoke-RestMethod -Uri "http://127.0.0.1:11434/api/tags" -TimeoutSec 3
   Write-Host "Ollama API: CONNECTED"
   if ($tags.models | Where-Object { $_.name -like "qwen3-vl:8b*" }) {
-    Write-Host "qwen3-vl:8b: AVAILABLE"
+    Write-Host "qwen3-vl:8b: INSTALLED"
+    try {
+      $chat = Invoke-RestMethod -Uri "http://127.0.0.1:11434/api/chat" -Method Post -ContentType "application/json" -TimeoutSec 180 -Body (@{
+        model = "qwen3-vl:8b"
+        stream = $false
+        format = "json"
+        messages = @(@{ role = "user"; content = 'Return JSON only: {"ok":true}' })
+        options = @{ num_predict = 64; temperature = 0 }
+      } | ConvertTo-Json -Depth 5)
+      $content = [string]$chat.message.content
+      $thinking = ""
+      if ($chat.message.PSObject.Properties.Name -contains "thinking") {
+        $thinking = [string]$chat.message.thinking
+      }
+      if (-not [string]::IsNullOrWhiteSpace($content) -or -not [string]::IsNullOrWhiteSpace($thinking)) {
+        Write-Host "qwen3-vl:8b: READY (chat smoke test passed)"
+      } else {
+        Write-Host "qwen3-vl:8b: INSTALLED but chat smoke test returned empty content"
+      }
+    } catch {
+      Write-Host "qwen3-vl:8b: INSTALLED but chat smoke test failed"
+    }
   } else {
     Write-Host "qwen3-vl:8b: MISSING (run ollama pull qwen3-vl:8b)"
   }

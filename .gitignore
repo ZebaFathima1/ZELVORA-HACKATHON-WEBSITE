@@ -6,6 +6,8 @@ out
 .env.*.local
 supabase/.temp/
 ai-worker/.env
+ai-worker/.supabase-secret-to-set.txt
+ai-worker/.supabase-secrets.env
 ai-worker/node_modules/
 ai-worker/.worker-id
 ai-worker/.worker.lock

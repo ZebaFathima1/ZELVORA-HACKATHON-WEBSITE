@@ -24,7 +24,7 @@
 
 ## Operations checklist
 
-- Set `ALLOWED_ORIGIN` to the exact frontend origin, not `*`, for deployment.
+- Set `ALLOWED_ORIGIN` to an explicit comma-separated origin allowlist (never `*`), e.g. `http://localhost:3000,http://localhost:3001,https://your-production-domain`. Edge Functions reflect only listed origins (plus built-in localhost:3000/3001). Append the production HTTPS origin when the site is deployed.
 - Configure and rotate the worker secret and optional GitHub token as managed secrets.
 - Import only verified registration records; restrict access to CSV files.
 - Set opening/deadline settings and verify with participant test IDs before announcing the portal.

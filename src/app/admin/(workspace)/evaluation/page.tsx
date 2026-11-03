@@ -76,7 +76,7 @@ export default function EvaluationPage() {
     const supabase = createClient();
     const [statusResult, workerResult, settingsResult] = await Promise.all([
       supabase.functions.invoke("evaluation-status", { body: {} }),
-      supabase.functions.invoke("ai-worker-status", { method: "GET" }),
+      supabase.functions.invoke("ai-worker-status", { body: {} }),
       supabase.from("event_settings").select("frozen").eq("id", true).single()
     ]);
     if (statusResult.error || workerResult.error || settingsResult.error || !settingsResult.data) {
@@ -129,7 +129,7 @@ export default function EvaluationPage() {
     setErrorMessage("");
     setMessage("");
     try {
-      const { data, error } = await createClient().functions.invoke("ai-worker-status", { method: "GET" });
+      const { data, error } = await createClient().functions.invoke("ai-worker-status", { body: {} });
       if (error) {
         setErrorMessage(await getFunctionErrorMessage(error));
         return;
@@ -139,6 +139,11 @@ export default function EvaluationPage() {
         return;
       }
       setWorkerStatus(data as WorkerStatus);
+      // Require the Edge Function payload itself — never report success from local worker alone.
+      if (typeof data.supabase !== "string" || data.supabase !== "connected") {
+        setErrorMessage("The Edge Function responded, but Supabase connectivity was not confirmed.");
+        return;
+      }
       if (!data.ready) {
         const reasons = [
           !data.worker.online ? "Windows worker is offline." : "",
@@ -149,7 +154,7 @@ export default function EvaluationPage() {
         setErrorMessage(reasons.join(" ") || "The worker is not ready.");
         return;
       }
-      setMessage(`Supabase, worker, Ollama, and ${data.model.name} are ready.`);
+      setMessage(`Edge Function OK. Supabase connected. Worker online. Ollama connected. Model ${data.model.name} available.`);
     } catch (testError) {
       setErrorMessage(testError instanceof Error ? testError.message : "The local AI worker connection test failed.");
     } finally {

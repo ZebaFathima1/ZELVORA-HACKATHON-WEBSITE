@@ -5,7 +5,10 @@ const onlineWindowMs = 90_000;
 
 Deno.serve(async (request) => {
   if (isOptions(request)) return new Response("ok", { headers: corsHeaders(request) });
-  if (request.method !== "GET") return json({ error: "Method not allowed." }, 405, request);
+  // Accept GET and POST: the browser Supabase client defaults to POST for functions.invoke.
+  if (request.method !== "GET" && request.method !== "POST") {
+    return json({ error: "Method not allowed." }, 405, request);
+  }
 
   const supabase = serviceClient();
   try {
